@@ -1,13 +1,12 @@
 import numpy as np
 from typing import Tuple, Optional
 from scipy.optimize import minimize
-
 from .TimeSeries import TimeSeries
 
 
 class GARCH(TimeSeries):
     """
-    GARCH(p, q) model for conditional variance.
+    GARCH(p, q) model for conditional variance of a time series.
 
     Attributes
     ----------
@@ -15,22 +14,22 @@ class GARCH(TimeSeries):
         Number of GARCH lags (sigma^2 terms).
     q : int
         Number of ARCH lags (squared residual terms).
-    params_ : Optional[np.ndarray]
-        Estimated parameter vector in the order [omega, alpha_1..alpha_q, beta_1..beta_p].
+    params : Optional[np.ndarray]
+        Estimated parameters: [omega, alpha_1..alpha_q, beta_1..beta_p].
     """
 
     def __init__(self, series: np.ndarray, p: int = 1, q: int = 1) -> None:
         """
-        Initialize the GARCH model.
+        Initialize GARCH(p, q) model.
 
         Parameters
         ----------
-        series : Sequence[float]
-            The observed time series (usually mean-zero residuals or returns).
+        series : np.ndarray
+            Time series residuals (usually from ARIMA, should be mean-zero).
         p : int, optional
-            Number of GARCH lags, by default 1.
+            Number of GARCH lags (sigma^2 terms), by default 1.
         q : int, optional
-            Number of ARCH lags, by default 1.
+            Number of ARCH lags (squared residuals), by default 1.
         """
         super().__init__(series)
         if p < 0 or q < 0:
@@ -42,19 +41,7 @@ class GARCH(TimeSeries):
     def _unpack_params(
         self, params: np.ndarray
     ) -> Tuple[float, np.ndarray, np.ndarray]:
-        """
-        Unpack parameter vector into omega, alphas and betas.
-
-        Parameters
-        ----------
-        params : np.ndarray
-            Parameter vector [omega, alpha_1..alpha_q, beta_1..beta_p].
-
-        Returns
-        -------
-        Tuple[float, np.ndarray, np.ndarray]
-            omega, alphas, betas
-        """
+        """Unpack parameter vector into omega, alpha, beta."""
         omega = float(params[0])
         alphas = np.array(params[1 : 1 + self.q]) if self.q > 0 else np.array([])
         betas = (
@@ -65,58 +52,37 @@ class GARCH(TimeSeries):
         return omega, alphas, betas
 
     def _garch_loglik(self, params: np.ndarray) -> float:
-        """
-        Negative conditional log-likelihood for GARCH(p, q) with Gaussian errors.
-
-        Parameters
-        ----------
-        params : np.ndarray
-            Parameter vector [omega, alpha_1..alpha_q, beta_1..beta_p].
-
-        Returns
-        -------
-        float
-            Negative log-likelihood (to be minimized).
-        """
+        """Negative log-likelihood for GARCH(p,q) with Gaussian errors."""
         omega, alphas, betas = self._unpack_params(params)
         y = np.asarray(self.series)
         n = len(y)
 
         max_lag = max(self.p, self.q, 1)
         sigma2 = np.empty(n)
-        sigma2.fill(np.var(y))
+        sigma2[:max_lag] = np.var(y)
 
         ll = 0.0
         for t in range(max_lag, n):
-            arch_term = 0.0
-            for i in range(1, self.q + 1):
-                arch_term += alphas[i - 1] * (y[t - i] ** 2)
-            garch_term = 0.0
-            for j in range(1, self.p + 1):
-                garch_term += betas[j - 1] * sigma2[t - j]
+            arch_term = (
+                np.sum(alphas * (y[t - np.arange(1, self.q + 1)] ** 2))
+                if self.q > 0
+                else 0.0
+            )
+            garch_term = (
+                np.sum(betas * sigma2[t - np.arange(1, self.p + 1)])
+                if self.p > 0
+                else 0.0
+            )
             sigma2[t] = omega + arch_term + garch_term
             if sigma2[t] <= 0:
                 return 1e12
             ll += 0.5 * (
                 np.log(2 * np.pi) + np.log(sigma2[t]) + (y[t] ** 2) / sigma2[t]
             )
-
         return ll
 
     def fit(self) -> np.ndarray:
-        """
-        Estimate GARCH(p, q) parameters by minimizing the negative log-likelihood.
-
-        Returns
-        -------
-        np.ndarray
-            Estimated parameters in the order [omega, alpha_1..alpha_q, beta_1..beta_p].
-
-        Raises
-        ------
-        RuntimeError
-            If optimization fails.
-        """
+        """Estimate GARCH(p, q) parameters by minimizing negative log-likelihood."""
         y = np.asarray(self.series)
         var_y = np.var(y)
 
@@ -129,11 +95,9 @@ class GARCH(TimeSeries):
             if (self.q + self.p) > 0
             else np.array([omega0])
         )
+        bounds = [(1e-12, None)] + [(0.0, 1.0) for _ in range(self.q + self.p)]
 
-        bounds = []
-        bounds.append((1e-12, None))
-        bounds.extend([(0.0, 1.0) for _ in range(self.q + self.p)])
-
+        # Constrain sum(alpha + beta) < 1 for stationarity
         def constraint_sum(params: np.ndarray) -> float:
             _, alphas, betas = self._unpack_params(params)
             return 1.0 - (np.sum(alphas) + np.sum(betas)) - 1e-8
@@ -146,102 +110,90 @@ class GARCH(TimeSeries):
             method="SLSQP",
             bounds=bounds,
             constraints=cons,
-            options={"maxiter": 1000, "ftol": 1e-9},
+            options={"maxiter": 2000, "ftol": 1e-9},
         )
 
         if not result.success:
-            raise RuntimeError(f"Optimization failed: {result.message}")
+            raise RuntimeError(f"GARCH optimization failed: {result.message}")
 
         self.params = np.array(result.x)
-
         return self.params
 
     def forecast_variance(self, steps: int = 5) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute in-sample conditional variances and multi-step forecasts.
-
-        The recursion uses observed squared values where available and uses
-        previously forecasted variances for future terms.
+        Compute in-sample conditional variance and multi-step forecasted variance.
 
         Parameters
         ----------
-        steps : int, optional
-            Number of steps to forecast, by default 5.
+        steps : int
+            Number of steps to forecast.
 
         Returns
         -------
         Tuple[np.ndarray, np.ndarray]
-            (in_sample_sigma2, forecasted_sigma2_array)
+            sigma2: in-sample conditional variance
+            sigma_forecast: multi-step forecasted variance
         """
         if self.params is None:
-            raise ValueError("Call fit() before forecast_variance().")
+            raise ValueError("Call fit() before forecast_variance()")
 
         omega, alphas, betas = self._unpack_params(self.params)
         y = np.asarray(self.series)
         n = len(y)
         max_lag = max(self.p, self.q, 1)
 
+        # Initialize in-sample conditional variance with sample variance
         sigma2 = np.empty(n)
-        sigma2.fill(np.var(y))
+        sigma2[:max_lag] = np.var(y)
 
+        # Compute in-sample conditional variance
         for t in range(max_lag, n):
-            arch_term = 0.0
-            for i in range(1, self.q + 1):
-                arch_term += alphas[i - 1] * (y[t - i] ** 2)
-            garch_term = 0.0
-            for j in range(1, self.p + 1):
-                garch_term += betas[j - 1] * sigma2[t - j]
+            arch_term = (
+                np.sum(alphas * y[t - np.arange(1, self.q + 1)] ** 2)
+                if self.q > 0
+                else 0
+            )
+            garch_term = (
+                np.sum(betas * sigma2[t - np.arange(1, self.p + 1)])
+                if self.p > 0
+                else 0
+            )
             sigma2[t] = omega + arch_term + garch_term
 
-        extended_len = n + steps
-        sigma_ext = np.empty(extended_len)
-        sigma_ext[:n] = sigma2
-        y_ext = np.empty(extended_len)
-        y_ext[:n] = y
-        y_ext[n:] = 0.0
+        # Multi-step forecast
+        sigma_forecast = np.zeros(steps)
+        last_y2 = y[-self.q :] ** 2 if self.q > 0 else np.array([])
+        last_sigma = sigma2[-self.p :] if self.p > 0 else np.array([])
 
-        for t in range(n, extended_len):
-            arch_term = 0.0
-            for i in range(1, self.q + 1):
-                idx = t - i
-                if idx >= 0:
-                    if idx < n:
-                        arch_term += alphas[i - 1] * (y_ext[idx] ** 2)
-                    else:
-                        arch_term += alphas[i - 1] * sigma_ext[idx]
-            garch_term = 0.0
-            for j in range(1, self.p + 1):
-                idx = t - j
-                if idx >= 0:
-                    garch_term += betas[j - 1] * sigma_ext[idx]
-            sigma_ext[t] = omega + arch_term + garch_term
+        for t in range(steps):
+            # For future unknown residuals, use the last forecasted variance for ARCH term
+            arch_term = np.sum(alphas * last_y2[-self.q :]) if self.q > 0 else 0
+            garch_term = np.sum(betas * last_sigma[-self.p :]) if self.p > 0 else 0
 
-        forecasted = sigma_ext[n:]
-        return sigma2, forecasted
+            sigma_next = omega + arch_term + garch_term
+            sigma_forecast[t] = sigma_next
 
+            # Update for next step: future squared residuals approximated by forecasted variance
+            if self.q > 0:
+                last_y2 = np.append(last_y2, sigma_next)
+            if self.p > 0:
+                last_sigma = np.append(last_sigma, sigma_next)
 
-if __name__ == "__main__":
-    np.random.seed(0)
-    n = 500
-    eps = np.random.normal(size=n)
-    true_omega, true_alphas, true_betas = 0.1, np.array([0.1]), np.array([0.8])
-    p, q = 1, 1
-    sigma2 = np.empty(n)
-    sigma2.fill(true_omega / (1 - true_alphas.sum() - true_betas.sum()))
-    y = np.empty(n)
-    y[0] = eps[0] * np.sqrt(sigma2[0])
-    for t in range(1, n):
-        sigma2[t] = (
-            true_omega
-            + true_alphas[0] * (y[t - 1] ** 2)
-            + true_betas[0] * sigma2[t - 1]
-        )
-        y[t] = eps[t] * np.sqrt(sigma2[t])
+        return sigma2, sigma_forecast
 
-    model = GARCH(y, p=p, q=q)
-    params = model.fit()
-    in_sample, forecast = model.forecast_variance(steps=5)
+    def aic(self) -> float:
+        """Compute Akaike Information Criterion for fitted GARCH model."""
+        if self.params is None:
+            raise ValueError("Fit the model first.")
+        n_params = 1 + self.q + self.p
+        neg_loglik = self._garch_loglik(self.params)
+        return 2 * n_params + 2 * neg_loglik
 
-    print("Estimated parameters:", params)
-    print("Last in-sample variances:", in_sample[-5:])
-    print("Forecast variances:", forecast)
+    def bic(self) -> float:
+        """Compute Bayesian Information Criterion for fitted GARCH model."""
+        if self.params is None:
+            raise ValueError("Fit the model first.")
+        n_params = 1 + self.q + self.p
+        n = len(self.series)
+        neg_loglik = self._garch_loglik(self.params)
+        return np.log(n) * n_params + 2 * neg_loglik

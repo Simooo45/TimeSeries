@@ -59,34 +59,33 @@ class TimeSeries:
 
         return pacf
 
-    def plot_ACF(self, max_lag: int = 20):
-        """Plot ACF with confidence interval."""
+    def plot_ACF_PACF(self, max_lag: int = 20):
+        """Plot ACF and PACF together with confidence intervals."""
         acf_vals = self.compute_acf(max_lag)
-        lags = np.arange(0, max_lag + 1)
-        plt.figure(figsize=(8, 4))
-        plt.bar(lags, acf_vals, width=0.3, color="skyblue", edgecolor="k")
-        plt.axhline(y=0, color="black", linewidth=0.8)
-        conf = 1.96 / np.sqrt(len(self.series))
-        plt.axhline(y=conf, color="red", linestyle="--", linewidth=1)
-        plt.axhline(y=-conf, color="red", linestyle="--", linewidth=1)
-        plt.title("Autocorrelation Function (ACF)")
-        plt.xlabel("Lag")
-        plt.ylabel("ρ(k)")
-        plt.show()
-
-    def plot_PACF(self, max_lag: int = 20):
-        """Plot PACF with confidence interval."""
         pacf_vals = self.compute_pacf(max_lag)
         lags = np.arange(0, max_lag + 1)
-        plt.figure(figsize=(8, 4))
-        plt.bar(lags, pacf_vals, width=0.3, color="lightgreen", edgecolor="k")
-        plt.axhline(y=0, color="black", linewidth=0.8)
         conf = 1.96 / np.sqrt(len(self.series))
-        plt.axhline(y=conf, color="red", linestyle="--", linewidth=1)
-        plt.axhline(y=-conf, color="red", linestyle="--", linewidth=1)
-        plt.title("Partial Autocorrelation Function (PACF)")
-        plt.xlabel("Lag")
-        plt.ylabel("φ(k,k)")
+
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+        # ACF
+        axes[0].bar(lags, acf_vals, width=0.3, color="skyblue", edgecolor="k")
+        axes[0].axhline(y=0, color="black", linewidth=0.8)
+        axes[0].axhline(y=conf, color="red", linestyle="--", linewidth=1)
+        axes[0].axhline(y=-conf, color="red", linestyle="--", linewidth=1)
+        axes[0].set_title("Autocorrelation Function (ACF)")
+        axes[0].set_ylabel("ρ(k)")
+
+        # PACF
+        axes[1].bar(lags, pacf_vals, width=0.3, color="lightgreen", edgecolor="k")
+        axes[1].axhline(y=0, color="black", linewidth=0.8)
+        axes[1].axhline(y=conf, color="red", linestyle="--", linewidth=1)
+        axes[1].axhline(y=-conf, color="red", linestyle="--", linewidth=1)
+        axes[1].set_title("Partial Autocorrelation Function (PACF)")
+        axes[1].set_xlabel("Lag")
+        axes[1].set_ylabel("φ(k,k)")
+
+        plt.tight_layout()
         plt.show()
 
     def cutoff(self, vals, conf, max_lag):
@@ -106,18 +105,40 @@ class TimeSeries:
         p = self.cutoff(pacf, conf, max_lag)
         return p, q
 
+    def check_stationarity(self, window: int = 50):
+        """
+        Plot rolling mean and variance of the series to visually inspect stationarity.
 
-if __name__ == "__main__":
-    # Example AR(2) simulation
-    np.random.seed(0)
-    n = 200
-    eps = np.random.normal(size=n)
-    series = np.zeros(n)
-    for t in range(2, n):
-        series[t] = 0.6 * series[t - 1] - 0.3 * series[t - 2] + eps[t]
+        Parameters
+        ----------
+        window : int
+            Window size for rolling statistics.
+        """
+        series = self.series
+        rolling_mean = np.convolve(series, np.ones(window) / window, mode="valid")
+        rolling_var = np.array(
+            [np.var(series[i : i + window]) for i in range(len(series) - window + 1)]
+        )
 
-    ts = TimeSeries(series)
-    ts.plot_ACF(max_lag=20)
-    ts.plot_PACF(max_lag=20)
-    p, q = ts.estimate_arma_p_q(20)
-    print("Suggested ARMA orders:", p, q)
+        plt.figure(figsize=(12, 5))
+        plt.plot(series, label="Original Series", color="blue")
+        plt.plot(
+            np.arange(window - 1, len(series)),
+            rolling_mean,
+            color="red",
+            label="Rolling Mean",
+        )
+        plt.plot(
+            np.arange(window - 1, len(series)),
+            rolling_var,
+            color="green",
+            label="Rolling Variance",
+        )
+        plt.title("Stationarity Check: Rolling Mean & Variance")
+        plt.xlabel("Time index")
+        plt.ylabel("Value")
+        plt.legend()
+        plt.show()
+
+    def __len__(self):
+        return len(self.series)
