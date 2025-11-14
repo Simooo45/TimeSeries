@@ -35,8 +35,8 @@ class GARCH(TimeSeries):
         super().__init__(series)
         if p < 0 or q < 0:
             raise ValueError("p and q must be non-negative integers.")
-        self.p = int(p)
-        self.q = int(q)
+        self.p = p
+        self.q = q
         self.params: Optional[np.ndarray] = None
 
     def _unpack_params(
@@ -152,7 +152,7 @@ class GARCH(TimeSeries):
         if not result.success:
             raise RuntimeError(f"Optimization failed: {result.message}")
 
-        self.params = np.ndarray(result.x)
+        self.params = np.array(result.x)
 
         return self.params
 
