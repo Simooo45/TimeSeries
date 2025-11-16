@@ -105,6 +105,17 @@ class TimeSeries:
         p = self.cutoff(pacf, conf, max_lag)
         return p, q
 
+    def plot_series(self):
+        """Plot the original time series."""
+        plt.figure(figsize=(10, 4))
+        plt.plot(self.series, label="Original series", color="steelblue")
+        plt.title("Original Time Series")
+        plt.xlabel("Time")
+        plt.ylabel("Value")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
     def check_stationarity(self, window: int = 50):
         """
         Plot rolling mean and variance of the series to visually inspect stationarity.
@@ -120,7 +131,7 @@ class TimeSeries:
             [np.var(series[i : i + window]) for i in range(len(series) - window + 1)]
         )
 
-        plt.figure(figsize=(12, 5))
+        plt.figure(figsize=(12, 6))
         plt.plot(series, label="Original Series", color="blue")
         plt.plot(
             np.arange(window - 1, len(series)),

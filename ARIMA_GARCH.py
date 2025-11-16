@@ -83,5 +83,49 @@ class ARIMA_GARCH(TimeSeries):
         # Forecast GARCH volatility
         _, sigma_forecast = self.garch_model.forecast_variance(steps=steps)
         sigma_forecast = np.sqrt(sigma_forecast)
-        print(sigma_forecast)
         return mu_forecast, sigma_forecast
+
+    def aic(self) -> float:
+        """
+        Compute Akaike Information Criterion (AIC) for the ARIMA-GARCH model.
+
+        Uses Gaussian quasi-log-likelihood:
+        logL = -0.5 * sum( log(2*pi*sigma_t^2) + eps_t^2 / sigma_t^2 )
+
+        Returns
+        -------
+        float
+            The AIC value: 2*k - 2*logL
+        """
+
+        # Check that both models are fitted
+        if self.arima_model is None or self.garch_model is None:
+            raise ValueError("You must call fit() before computing AIC.")
+
+        # Extract residuals from ARIMA
+        eps = self.resid.copy()
+
+        # Compute conditional variances from the fitted GARCH model
+        # forecast_variance returns (sigma2_full, sigma2_future)
+        sigma2, _ = self.garch_model.forecast_variance(steps=0)
+        sigma2 = np.array(sigma2)
+
+        # Ensure alignment
+        n = min(len(eps), len(sigma2))
+        eps = eps[-n:]
+        sigma2 = sigma2[-n:]
+
+        # Compute Gaussian log-likelihood
+        logL = -0.5 * np.sum(np.log(2 * np.pi * sigma2) + (eps**2) / sigma2)
+
+        # Count number of parameters:
+        # ARIMA: c + phi(p) + theta(q)
+        k_arima = 1 + self.arima_p + self.arima_q
+
+        # GARCH: omega + alpha(q) + beta(p)
+        k_garch = 1 + self.garch_q + self.garch_p
+
+        k = k_arima + k_garch
+
+        # Return AIC
+        return 2 * k - 2 * logL

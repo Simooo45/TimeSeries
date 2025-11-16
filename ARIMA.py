@@ -121,31 +121,39 @@ class ARIMA(TimeSeries):
 
         return forecasts
 
-    def plot_series(self):
-        """Plot the original time series."""
-        plt.figure(figsize=(10, 4))
-        plt.plot(self.series, label="Original series", color="steelblue")
-        plt.title("Original Time Series")
-        plt.xlabel("Time")
-        plt.ylabel("Value")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+    def aic(self):
+        """
+        Compute the Akaike Information Criterion (AIC) for the fitted ARIMA model.
 
-    def plot_fitted_vs_actual(self):
-        """Plot in-sample fitted values vs actual series (differenced)."""
-        diff_ts = self.first_difference(self.d)
-        y_true = diff_ts.series[max(self.p, self.q) :]
-        y_pred = self.forecast_in_sample()
-        plt.figure(figsize=(10, 4))
-        plt.plot(y_true, label="Actual (differenced)", color="black")
-        plt.plot(y_pred, label="Fitted (in-sample)", color="red", linestyle="--")
-        plt.title("Fitted vs Actual (Differenced Series)")
-        plt.xlabel("Time")
-        plt.ylabel("Value")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        Returns
+        -------
+        float
+            The AIC value computed from the estimated residuals.
+        """
+        # Check that the model is fitted
+        if "resid" not in self.params:
+            raise ValueError("You must call fit() before computing AIC.")
+
+        resid = self.params["resid"]
+
+        # Remove initial zeros from the residuals (CLS produces leading zeros)
+        valid_resid = resid[max(self.p, self.q) :]
+
+        # Compute residual variance
+        sigma2 = np.var(valid_resid)
+
+        # Number of parameters estimated: c + p AR + q MA
+        k = 1 + self.p + self.q
+
+        # Compute Gaussian log-likelihood
+        # Using the standard formula for independent N(0, σ^2) errors
+        n = len(valid_resid)
+        ll = -0.5 * n * (np.log(2 * np.pi * sigma2) + 1)
+
+        # Compute AIC
+        aic_value = 2 * k - 2 * ll
+
+        return aic_value
 
     def plot_residuals(self):
         """Plot residuals for model diagnostics."""
